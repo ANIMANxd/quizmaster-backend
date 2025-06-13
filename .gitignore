@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+.env
+*.env
+
+# Environment
+evn/
+venv/
+
+# Editor
+.vscode/
