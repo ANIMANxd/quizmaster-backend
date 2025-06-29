@@ -58,17 +58,28 @@ async def generate_ai_quiz_from_file(
         if not content.strip():
             raise HTTPException(status_code=400, detail="The uploaded file has no text content.")
 
-        prompt = f"""
-        You are a master instructional designer and expert exam creator specializing in aptitude and application-based assessments. Your task is to analyze the provided text and create a high-quality quiz that tests a user's ability to APPLY the knowledge within the text, not just recall it.
+        # Calculate total questions outside the prompt for clarity
+        total_questions = mcq_count + msq_count
 
-        **Core Instructions:**
-        1.  **Question Quality:** All questions must be application-based or aptitude-based. They should present a scenario, a problem, or require the user to synthesize information.
-        2.  **AVOID:** Do NOT create simple, low-level recall questions that can be answered by just finding a sentence in the text. Avoid questions about definitions or basic facts.
-        3.  **Generate:**
-            - {mcq_count} Multiple Choice Questions (MCQ) with exactly one correct answer.
-            - {msq_count} Multiple Select Questions (MSQ) with one or more correct answers.
-            - A suitable, concise title for the quiz based on the text's primary theme.
-        4.  **Distractors:** For all questions, the incorrect options (distractors) must be plausible and relevant to the text's subject matter to ensure the question is challenging.
+        prompt = f"""
+        You are a master instructional designer and expert exam creator. Your task is to create a high-quality aptitude and application-based quiz from the provided text. Adherence to the exact number of questions requested is the highest priority.
+
+        **Generation Mandate (Strict):**
+        You MUST generate:
+        1.  **Exactly {mcq_count}** Multiple Choice Questions (MCQ).
+        2.  **Exactly {msq_count}** Multiple Select Questions (MSQ).
+        3.  **One** suitable, concise title for the quiz.
+        Failure to generate the precise number of questions specified is a failure of the task.
+
+        **Question Quality Mandate:**
+        - All questions must be **application-based or scenario-based**. They must test the user's ability to apply knowledge, not just recall it.
+        - **Do NOT** create simple definition or fact-retrieval questions.
+        - Incorrect options (distractors) must be plausible and relevant to the text's subject matter.
+
+        **Final Verification Step:**
+        - Before outputting the JSON, you must internally verify your work.
+        - Confirm that the `questions` array in your JSON contains **exactly {total_questions} total objects**.
+        - Confirm that there are exactly **{mcq_count} objects with `"type": "MCQ"`** and **{msq_count} objects with `"type": "MSQ"`**.
 
         **Output Format Constraint (Non-negotiable):**
         - Your ENTIRE response MUST be a single, raw, valid JSON object.
