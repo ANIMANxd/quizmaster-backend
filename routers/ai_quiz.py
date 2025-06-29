@@ -59,28 +59,43 @@ async def generate_ai_quiz_from_file(
             raise HTTPException(status_code=400, detail="The uploaded file has no text content.")
 
         prompt = f"""
-        You are an expert exam setter. From the text below, generate:
-        - {mcq_count} Multiple Choice Questions (only 1 correct)
-        - {msq_count} Multiple Select Questions (more than 1 correct)
+        You are a master instructional designer and expert exam creator specializing in aptitude and application-based assessments. Your task is to analyze the provided text and create a high-quality quiz that tests a user's ability to APPLY the knowledge within the text, not just recall it.
 
-        Also generate a suitable title for the quiz based on the content.
-        
-        Return a single, valid JSON object only. Do not include any other text or markdown formatting.
-        The JSON format must be:
+        **Core Instructions:**
+        1.  **Question Quality:** All questions must be application-based or aptitude-based. They should present a scenario, a problem, or require the user to synthesize information.
+        2.  **AVOID:** Do NOT create simple, low-level recall questions that can be answered by just finding a sentence in the text. Avoid questions about definitions or basic facts.
+        3.  **Generate:**
+            - {mcq_count} Multiple Choice Questions (MCQ) with exactly one correct answer.
+            - {msq_count} Multiple Select Questions (MSQ) with one or more correct answers.
+            - A suitable, concise title for the quiz based on the text's primary theme.
+        4.  **Distractors:** For all questions, the incorrect options (distractors) must be plausible and relevant to the text's subject matter to ensure the question is challenging.
+
+        **Output Format Constraint (Non-negotiable):**
+        - Your ENTIRE response MUST be a single, raw, valid JSON object.
+        - Do NOT include any introductory text, explanations, summaries, or markdown formatting like ```json.
+        - Your response must begin with `{{` and end with `}}`.
+
+        The JSON structure must be EXACTLY as follows:
         {{
-            "title": "AI Generated Quiz Title",
+            "title": "A Concise and Relevant Quiz Title",
             "questions": [
                 {{
-                    "question": "The question text...",
-                    "type": "MCQ" or "MSQ",
-                    "options": ["Option A", "Option B", "Option C", "Option D"],
-                    "correct_answers": ["Option A"] or ["Option B", "Option D"]
+                    "question": "An application-based question text...",
+                    "type": "MCQ",
+                    "options": ["Plausible Option A", "Plausible Option B", "Plausible Option C", "Plausible Option D"],
+                    "correct_answers": ["The exact text of the single correct option"]
                 }},
-                ...
+                {{
+                    "question": "A scenario-based question text...",
+                    "type": "MSQ",
+                    "options": ["Plausible Option W", "Plausible Option X", "Plausible Option Y", "Plausible Option Z"],
+                    "correct_answers": ["The exact text of one correct option", "The exact text of another correct option"]
+                }}
             ]
         }}
 
-        TEXT:
+        **Source Text for Quiz Generation:**
+        ---
         {content}
         """
 
