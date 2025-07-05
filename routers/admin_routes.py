@@ -140,3 +140,64 @@ def get_admin_dashboard_data(
         most_attempted_quizzes=most_attempted_quizzes,
         lowest_scoring_quizzes=lowest_scoring_quizzes
     )
+
+@router.get("/users/{user_id}/assigned-subjects", response_model=List[int])
+def get_user_assigned_subjects(
+    user_id: int,
+    admin: models.User = Security(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin-only endpoint to get a list of subject IDs assigned to a specific user.
+    """
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    assigned_subject_ids = []
+    if user.role == 'teacher':
+        # Get IDs from the teacher_subjects relationship
+        assigned_subject_ids = [subject.id for subject in user.teacher_subjects]
+    elif user.role == 'user':
+        # Get IDs from the student_subjects relationship
+        assigned_subject_ids = [subject.id for subject in user.student_subjects]
+    
+    return assigned_subject_ids
+
+@router.post("/assign-subjects", status_code=200)
+def assign_subjects_to_user(
+    assignment: schemas.SubjectAssignment,
+    admin: models.User = Security(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Assigns a list of subjects to a user (student or teacher).
+    This will overwrite any existing assignments for the user.
+    """
+    user_to_assign = db.query(models.User).filter(models.User.id == assignment.user_id).first()
+    if not user_to_assign:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Fetch all valid subjects to ensure subject_ids are correct
+    subjects = db.query(models.Subject).filter(models.Subject.id.in_(assignment.subject_ids)).all()
+    if len(subjects) != len(assignment.subject_ids):
+        raise HTTPException(status_code=400, detail="One or more subject IDs are invalid.")
+
+    # Assign based on the user's role
+    if user_to_assign.role == "teacher":
+        # Clear existing assignments first for simplicity
+        user_to_assign.teacher_subjects.clear()
+        user_to_assign.teacher_subjects.extend(subjects)
+        message = f"Assigned {len(subjects)} subjects to teacher {user_to_assign.name}."
+    elif user_to_assign.role == "user": # 'user' is our student
+        user_to_assign.student_subjects.clear()
+        user_to_assign.student_subjects.extend(subjects)
+        message = f"Assigned {len(subjects)} subjects to student {user_to_assign.name}."
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot assign subjects to a user with role '{user_to_assign.role}'."
+        )
+
+    db.commit()
+    return {"message": message}

@@ -6,6 +6,7 @@ import tempfile, os, json
 import models  # This now refers to your unified models
 from database import get_db
 from dotenv import load_dotenv
+from auth import get_current_user  
 import google.generativeai as genai
 
 router = APIRouter(prefix="/ai-quizzes", tags=["AI Quiz Generation"])
@@ -110,7 +111,7 @@ async def generate_ai_quiz_from_file(
         {content}
         """
 
-        model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+        model = genai.GenerativeModel(model_name="gemini-2.0-flash")
         response = model.generate_content([prompt])
         
         text = response.text.strip()
@@ -137,7 +138,8 @@ async def generate_ai_quiz_from_file(
 @router.post("/submit")
 async def submit_ai_generated_quiz(
     payload: dict,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user) # <<<--- ADD THE DEPENDENCY
 ):
     try:
         title = payload.get("title")
@@ -147,6 +149,31 @@ async def submit_ai_generated_quiz(
         if not all([title, chapter_id, questions]):
             raise HTTPException(status_code=400, detail="Missing title, chapter_id, or questions.")
 
+        # ==================== START: NEW PERMISSION LOGIC ====================
+
+        # First, find the chapter the quiz is being added to.
+        target_chapter = db.query(models.Chapter).filter(models.Chapter.id == chapter_id).first()
+        if not target_chapter:
+            raise HTTPException(status_code=404, detail=f"Chapter with id {chapter_id} not found.")
+        
+        # Now, check permissions based on user role.
+        if current_user.role == 'teacher':
+            # Get all the subject IDs assigned to this teacher.
+            teacher_subject_ids = {s.id for s in current_user.teacher_subjects}
+            
+            # Check if the chapter's subject ID is in the teacher's list.
+            if target_chapter.subject_id not in teacher_subject_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Forbidden: You can only generate AI quizzes for subjects you are assigned to."
+                )
+        
+        # If the role is 'admin', they are allowed to proceed without checks.
+        # If the role is 'user', they shouldn't even have access to this endpoint
+        # (this should be controlled on the frontend, but a check here would also be valid).
+        
+        # ==================== END: NEW PERMISSION LOGIC ====================
+
         new_quiz = models.Quiz(
             title=title,
             chapter_id=chapter_id,
@@ -154,17 +181,17 @@ async def submit_ai_generated_quiz(
             created_at=datetime.utcnow()
         )
         db.add(new_quiz)
-        db.flush()  # <-- FIX #1: Flush here to get the new_quiz.id
+        db.flush()  # Get the new_quiz.id
 
         for q in questions:
             question_obj = models.Question(
                 question_text=q["question"],
-                quiz_id=new_quiz.id, # Now new_quiz.id is available
+                quiz_id=new_quiz.id,
                 marks=q.get("marks", 1),
                 question_type=q["type"].lower()
             )
             db.add(question_obj)
-            db.flush() # <-- FIX #2: Flush here to get the question_obj.id
+            db.flush() # Get the question_obj.id
 
             options = q.get("options", [])
             correct_answers = q.get("correct_answers", [])
@@ -172,18 +199,21 @@ async def submit_ai_generated_quiz(
             for option_text in options:
                 is_correct = option_text in correct_answers
                 option_obj = models.Option(
-                    question_id=question_obj.id, # Now question_obj.id is available
+                    question_id=question_obj.id,
                     option_text=option_text,
                     is_correct=is_correct
                 )
                 db.add(option_obj)
 
-        db.commit() # Commit everything at the very end
+        db.commit()
         db.refresh(new_quiz)
         return {"msg": "AI Quiz successfully saved!", "quiz_id": new_quiz.id}
         
     except Exception as e:
         db.rollback()
-        # It's helpful to log the actual error for debugging
+        # Log the actual error for easier debugging
         print(f"ERROR saving AI quiz: {e}") 
-        raise HTTPException(status_code=500, detail=f"Failed to save quiz: {str(e)}")
+        # Re-raise with a more generic message for the client
+        if isinstance(e, HTTPException):
+             raise e # If it's already an HTTPException, just raise it
+        raise HTTPException(status_code=500, detail=f"Failed to save quiz due to an internal error.")

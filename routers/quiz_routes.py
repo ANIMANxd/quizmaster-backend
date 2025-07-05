@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
+from auth import get_current_user
 
 import models
 import schemas # Assuming your Pydantic schemas are in schemas.py
@@ -148,14 +149,75 @@ def request_reattempt(payload: dict):
 
 
 @router.get("/performance/user/{user_id}", response_model=schemas.UserPerformance, tags=["Performance"])
-def get_user_performance_summary(user_id: int, db: Session = Depends(get_db)):
+def get_user_performance_summary(
+    user_id: int, 
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user) # The user MAKING the request
+):
     """
     Gathers all performance data for a given user and calculates statistics.
+    Permissions are enforced based on the role of the user making the request.
+    - Admin: Sees all performance data for any user.
+    - Teacher: Sees performance data for a student ONLY for subjects they both share.
+    - Student ('user'): Can only view their own performance data.
     """
-    attempts = db.query(models.QuizAttempt).options(
-        joinedload(models.QuizAttempt.quiz).joinedload(models.Quiz.chapter).joinedload(models.Chapter.subject)
-    ).filter(models.QuizAttempt.user_id == user_id).all()
+    student_to_view = db.query(models.User).filter(models.User.id == user_id).first()
+    if not student_to_view:
+        raise HTTPException(status_code=404, detail="Student not found")
 
+    # ==================== START: NEW PERMISSION LOGIC ====================
+
+    # This set will store the IDs of subjects the current_user is allowed to view for the student_to_view
+    allowed_subject_ids = set()
+
+    if current_user.role == 'admin':
+        # Admin can see everything. We can just skip subject filtering later.
+        pass # No need to populate allowed_subject_ids, we'll query all attempts.
+
+    elif current_user.role == 'teacher':
+        # A teacher can only view a student's performance in shared subjects.
+        teacher_subjects = {s.id for s in current_user.teacher_subjects}
+        student_subjects = {s.id for s in student_to_view.student_subjects}
+        
+        # The intersection gives us the subjects they have in common.
+        allowed_subject_ids = teacher_subjects.intersection(student_subjects)
+        
+        if not allowed_subject_ids:
+            # If they share no subjects, the teacher sees nothing.
+            # We can return an empty response early.
+            return schemas.UserPerformance(
+                total_quizzes_taken=0, total_attempts=0, average_score=0.0,
+                best_subject=None, worst_subject=None, performance_by_subject=[],
+                recent_attempts=[], best_performing_quizzes=[], improvement_areas=[]
+            )
+
+    elif current_user.role == 'user':
+        # A student can only view their own performance.
+        if current_user.id != student_to_view.id:
+            raise HTTPException(status_code=403, detail="Not authorized to view this user's performance.")
+        # We don't need to filter by subject for a student viewing their own data.
+        pass
+
+    # Base query for all attempts by the student being viewed
+    attempts_query = db.query(models.QuizAttempt).options(
+        joinedload(models.QuizAttempt.quiz)
+        .joinedload(models.Quiz.chapter)
+        .joinedload(models.Chapter.subject)
+    ).filter(models.QuizAttempt.user_id == user_id)
+
+    # If the viewer is a teacher, we MUST filter the attempts by the allowed subjects.
+    # We do nothing for admins or students viewing themselves, as they see all their data.
+    if current_user.role == 'teacher':
+        attempts_query = attempts_query.join(models.Quiz, models.Quiz.id == models.QuizAttempt.quiz_id)\
+                                     .join(models.Chapter, models.Chapter.id == models.Quiz.chapter_id)\
+                                     .filter(models.Chapter.subject_id.in_(allowed_subject_ids))
+
+    attempts = attempts_query.all()
+    
+    # ==================== END: NEW PERMISSION LOGIC ====================
+
+
+    # --- Your existing calculation logic starts here, operating on the filtered 'attempts' ---
     if not attempts:
         return schemas.UserPerformance(
             total_quizzes_taken=0, total_attempts=0, average_score=0.0,
@@ -169,9 +231,11 @@ def get_user_performance_summary(user_id: int, db: Session = Depends(get_db)):
 
     subject_scores = defaultdict(lambda: {'scores': [], 'count': 0})
     for attempt in attempts:
-        subject_name = attempt.quiz.chapter.subject.name
-        subject_scores[subject_name]['scores'].append(attempt.score)
-        subject_scores[subject_name]['count'] += 1
+        # Check if the attempt has a valid subject (it always should after the join)
+        if attempt.quiz and attempt.quiz.chapter and attempt.quiz.chapter.subject:
+            subject_name = attempt.quiz.chapter.subject.name
+            subject_scores[subject_name]['scores'].append(attempt.score)
+            subject_scores[subject_name]['count'] += 1
 
     performance_by_subject = [
         schemas.PerformanceBySubject(subject_name=name, average_score=sum(data['scores']) / data['count'], attempts_count=data['count'])
@@ -189,13 +253,17 @@ def get_user_performance_summary(user_id: int, db: Session = Depends(get_db)):
         quiz_scores[attempt.quiz_id].append(attempt.score)
     
     quiz_best_scores = [
-        {"quiz_id": quiz_id, "quiz_title": db.query(models.Quiz.title).filter(models.Quiz.id == quiz_id).scalar(), "best_score": max(scores)}
+        schemas.QuizPerformance(quiz_id=quiz_id, quiz_title=db.query(models.Quiz.title).filter(models.Quiz.id == quiz_id).scalar(), best_score=max(scores))
         for quiz_id, scores in quiz_scores.items()
     ]
             
-    sorted_quizzes = sorted(quiz_best_scores, key=lambda x: x['best_score'], reverse=True)
-    best_performing_quizzes = sorted_quizzes[:5]
-    improvement_areas = sorted(quiz_best_scores, key=lambda x: x['best_score'])[:5]
+    sorted_quizzes_desc = sorted(quiz_best_scores, key=lambda x: x.best_score, reverse=True)
+    
+    # Sort the list of objects by the 'best_score' attribute in ascending order
+    sorted_quizzes_asc = sorted(quiz_best_scores, key=lambda x: x.best_score)
+    
+    best_performing_quizzes = sorted_quizzes_desc[:5]
+    improvement_areas = sorted_quizzes_asc[:5]
 
     recent_attempts_query = sorted(attempts, key=lambda x: x.timestamp, reverse=True)[:10]
     recent_attempts = [
@@ -290,3 +358,48 @@ def get_admin_dashboard_data(
         most_attempted_quizzes=most_attempted_quizzes,
         lowest_scoring_quizzes=lowest_scoring_quizzes
     )
+
+
+# @router.get("/quizzes/by-teacher", response_model=List[schemas.QuizRead])
+@router.get("/quizzes/by-teacher") 
+def get_quizzes_for_teacher(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Returns a list of all quizzes that belong to the subjects
+    assigned to the currently logged-in teacher.
+    """
+    if current_user.role != 'teacher':
+        raise HTTPException(
+            status_code=403, 
+            detail="This endpoint is for teachers only."
+        )
+
+    # 1. Get the IDs of subjects assigned to the teacher
+    teacher_subject_ids = {subject.id for subject in current_user.teacher_subjects}
+
+    if not teacher_subject_ids:
+        return [] # Return empty list if teacher has no subjects
+
+    # 2. Query for quizzes where the chapter's subject_id is in the teacher's list
+    quizzes = db.query(models.Quiz)\
+        .join(models.Chapter, models.Quiz.chapter_id == models.Chapter.id)\
+        .filter(models.Chapter.subject_id.in_(teacher_subject_ids))\
+        .all()
+    
+    response_quizzes = []
+    for quiz in quizzes:
+        response_quizzes.append(
+            schemas.QuizRead(
+                id=quiz.id,
+                title=quiz.title,
+                chapter_id=quiz.chapter_id,
+                is_ai_generated=quiz.is_ai_generated if quiz.is_ai_generated is not None else False,
+                created_at=quiz.created_at
+            )
+        )
+    
+    return response_quizzes
+    return quizzes
+    

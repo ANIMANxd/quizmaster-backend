@@ -16,7 +16,7 @@ SECRET_KEY = "897eur9we8udrg93845j239i4tm3un9fvesi9rmoiufn93"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 
 # Pydantic model for login response
@@ -48,7 +48,7 @@ def decode_access_token(token: str):
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.JWTError:
+    except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
@@ -91,4 +91,4 @@ def authenticate_user(email: str, password: str, db: Session) -> Optional[User]:
 
 
 def generate_token_for_user(user: User) -> str:
-    return create_access_token(data={"sub": str(user.id), "role": user.role})
+    return create_access_token(data={"sub": str(user.email), "role": user.role})

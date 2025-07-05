@@ -186,3 +186,8 @@ class UserPerformance(BaseModel):
     recent_attempts: List[RecentAttempt]
     best_performing_quizzes: List[QuizPerformance]
     improvement_areas: List[QuizPerformance]
+
+
+class SubjectAssignment(BaseModel):
+    user_id: int
+    subject_ids: List[int]

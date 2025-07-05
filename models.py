@@ -1,8 +1,21 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Boolean, DateTime, Table
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
 from pydantic import BaseModel, EmailStr
+
+
+# NEW: Association Table for Teachers and Subjects
+teacher_subject_association = Table('teacher_subject_association', Base.metadata,
+    Column('user_id', Integer, ForeignKey('users.id', ondelete="CASCADE"), primary_key=True),
+    Column('subject_id', Integer, ForeignKey('subjects.id', ondelete="CASCADE"), primary_key=True)
+)
+
+# NEW: Association Table for Students and Subjects
+student_subject_association = Table('student_subject_association', Base.metadata,
+    Column('user_id', Integer, ForeignKey('users.id', ondelete="CASCADE"), primary_key=True),
+    Column('subject_id', Integer, ForeignKey('subjects.id', ondelete="CASCADE"), primary_key=True)
+)
 
 class User(Base):
     __tablename__ = "users"
@@ -13,6 +26,20 @@ class User(Base):
     role = Column(String, default="user")  # 'user' or 'admin'
     created_at = Column(DateTime, default=datetime.utcnow)
     attempts = relationship("QuizAttempt", back_populates="user", cascade="all, delete")
+
+    # NEW RELATIONSHIPS
+    # For a user who is a teacher, this will hold their subjects.
+    teacher_subjects = relationship(
+        "Subject",
+        secondary=teacher_subject_association,
+        back_populates="teachers"
+    )
+    # For a user who is a student, this will hold their subjects.
+    student_subjects = relationship(
+        "Subject",
+        secondary=student_subject_association,
+        back_populates="students"
+    )
 
 
 class UserCreate(BaseModel):
@@ -27,6 +54,18 @@ class Subject(Base):
     name = Column(String, unique=True, index=True, nullable=False)
     description = Column(String)
     chapters = relationship("Chapter", back_populates="subject", cascade="all, delete")
+
+    # NEW RELATIONSHIPS
+    teachers = relationship(
+        "User",
+        secondary=teacher_subject_association,
+        back_populates="teacher_subjects"
+    )
+    students = relationship(
+        "User",
+        secondary=student_subject_association,
+        back_populates="student_subjects"
+    )
 
 
 class Chapter(Base):
