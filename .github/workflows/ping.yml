@@ -1,0 +1,13 @@
+name: Keep Quizmaster Backend Alive
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend
+        run: curl -s https://quizmaster-backend-1.onrender.com/ > /dev/null
